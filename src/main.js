@@ -1,4 +1,4 @@
 import './style.css'
-import { initScene } from './scene'
+import './ui'
 
-initScene()
+// ui.js will initialize the scene and the overlay

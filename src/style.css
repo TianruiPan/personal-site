@@ -2,10 +2,11 @@
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
+  --scene-offset: clamp(8px, 4vw, 24px);
 
   color-scheme: light dark;
   color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
+  background-color: #ffffff;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -36,7 +37,7 @@ h1 {
 }
 
 #app {
-  max-width: 1280px;
+  max-width: 1920px;
   margin: 0 auto;
   padding: 2rem;
   text-align: center;
@@ -84,7 +85,7 @@ button:focus-visible {
 
 @media (prefers-color-scheme: light) {
   :root {
-    color: #213547;
+    color: #ffffff;
     background-color: #ffffff;
   }
   a:hover {
@@ -93,4 +94,89 @@ button:focus-visible {
   button {
     background-color: #f9f9f9;
   }
+}
+
+/* Ensure the scene canvas fills the window and disable page scrollbars */
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Three.js renderer canvas (appended to body) should cover the viewport */
+/* Fullscreen canvas helper (used when mounting renderer to body) */
+.fullscreen-canvas {
+  display: block;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Scene window: a smaller container with black border holding the canvas */
+.scene-wrapper {
+  /* 固定于视口，相对于窗口保持固定向内 offset（可响应缩放） */
+  position: fixed;
+  inset: var(--scene-offset); /* top/right/bottom/left */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.scene-window {
+  /* 填满 wrapper 的可用空间，但受 max 宽高 限制以保留合理尺寸 */
+  width: 100%;
+  /* remove max limits so scene-window can expand to fill the wrapper on large screens */
+  max-width: none;
+  height: 100%;
+  max-height: none;
+  position: relative;
+  background: #fff;
+  border: 2px solid #000; /* 黑色描边 */
+  box-sizing: border-box;
+  overflow: hidden; /* canvas will absolutely fill this */
+  padding: var(--scene-offset); /* 场景容器内边距（响应缩放） */
+}
+
+/* 内层渲染容器：填满 scene-window 的内容区（受 padding 影响）
+   把 WebGL canvas 挂到这里，renderer.setSize 会使用这个元素的 clientWidth/clientHeight */
+.scene-inner {
+  position: absolute;
+  inset: 0; /* 填满 scene-window 的内容区（不包含 padding） */
+  width: 100%;
+  height: 100%;
+}
+
+/* UI overlay that sits above the scene window */
+#ui-overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+#ui-overlay h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  color: #111;
+}
+#ui-overlay .ui-actions {
+  margin-left: 1rem;
+}
+#ui-overlay button {
+  background: #111;
+  color: #fff;
+  border: none;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+/* If you keep an overlay UI like #app, ensure it sits above the canvas */
+#app {
+  position: relative;
+  z-index: 1;
 }

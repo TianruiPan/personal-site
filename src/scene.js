@@ -2,23 +2,65 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
 import { setupRaycast } from './raycast'
 
-export function initScene() {
+export function initScene(container = document.body, options = {}) {
   const scene = new THREE.Scene()
   scene.background = new THREE.Color(0xffffff)
 
   const camera = new THREE.PerspectiveCamera(
-    60,
+    36,
     window.innerWidth / window.innerHeight,
     0.1,
     100
   )
-  camera.position.set(0, 2, 3)
+  // initial camera position: allow override via options.defaultCameraPosition
+  if (options.defaultCameraPosition) {
+    const p = options.defaultCameraPosition
+    if (Array.isArray(p)) camera.position.set(p[0], p[1], p[2])
+    else if (p && typeof p === 'object' && p.isVector3) camera.position.copy(p)
+    else if (p && typeof p === 'object' && 'x' in p) camera.position.set(p.x, p.y, p.z)
+  } else {
+    camera.position.set(0, 2, 4)
+  }
+
+  // store default view (position + lookAt) so we can return "home"
+  let _defaultCameraPosition = camera.position.clone()
+  let _defaultLookAt = new THREE.Vector3(0, 1, 0)
+  if (options.defaultLookAt) {
+    const la = options.defaultLookAt
+    if (Array.isArray(la)) _defaultLookAt.set(la[0], la[1], la[2])
+    else if (la && typeof la === 'object' && la.isVector3) _defaultLookAt.copy(la)
+    else if (la && typeof la === 'object' && 'x' in la) _defaultLookAt.set(la.x, la.y, la.z)
+  } else {
+    // derive a simple forward point in front of the camera so lookAt has a reasonable default
+    const forward = new THREE.Vector3()
+    camera.getWorldDirection(forward)
+    _defaultLookAt.copy(camera.position).add(forward)
+  }
 
   const renderer = new THREE.WebGLRenderer({ antialias: true })
-  renderer.setSize(window.innerWidth, window.innerHeight)
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+  // renderer will size to either the provided container or the window
+  function getWidth() {
+    return (container && container !== document.body) ? container.clientWidth : window.innerWidth
+  }
+  function getHeight() {
+    return (container && container !== document.body) ? container.clientHeight : window.innerHeight
+  }
+  renderer.setSize(getWidth(), getHeight())
+  renderer.domElement.style.display = 'block'
+  // Use absolute positioning so canvas fills the container element
+  renderer.domElement.style.position = 'absolute'
+  renderer.domElement.style.top = '0'
+  renderer.domElement.style.left = '0'
+  renderer.domElement.style.width = '100%'
+  renderer.domElement.style.height = '100%'
   // disable shadowmaps and physically based lighting for flat unlit rendering
   renderer.shadowMap.enabled = false
-  document.body.appendChild(renderer.domElement)
+  // Append to the requested container (fallback to body)
+  const mountTarget = container || document.body
+  mountTarget.appendChild(renderer.domElement)
+  // If mounted to body and intended to be fullscreen, add a helper class
+  if (mountTarget === document.body) renderer.domElement.classList.add('fullscreen-canvas')
 
   const light = new THREE.DirectionalLight(0xffffff, 5)
   light.position.set(5, 5, 0)
@@ -31,8 +73,8 @@ export function initScene() {
   const defaultCameraOffsets = {
     // Example: 'MyMeshName': [0, 1.2, 2.5]
     'paper': [0, 1, 0],
-    'monitor': [1, 0, 0],
-    'desk': [3, 1.2, 0],
+    'monitor': [0.5, 0, 0],
+    'desk': [3, 3, 0],
     'keyboard': [1, 0.5, 0]
   }
   // Per-object pickability map. If a name exists and is false, that object won't be pickable.
@@ -41,7 +83,7 @@ export function initScene() {
     'paper': true,
     'monitor': true,
     'ground': false,
-    // 'desk': false, // example to make desk non-pickable
+    'desk': false,
   }
   let _currentFocus = null
   let _cameraAnim = null
@@ -141,8 +183,94 @@ export function initScene() {
     })
   }
 
+  // Move camera smoothly to an explicit world position and lookAt point
+  function moveCameraToVectors(targetPos, targetLook, duration = 700) {
+    if (!targetPos || !targetLook) return
+
+    const startPos = camera.position.clone()
+    const startLook = new THREE.Vector3()
+    camera.getWorldDirection(startLook)
+    startLook.add(camera.position)
+
+    const targetPosV = (targetPos.isVector3) ? targetPos.clone() : new THREE.Vector3(targetPos.x, targetPos.y, targetPos.z)
+    const targetLookV = (targetLook.isVector3) ? targetLook.clone() : new THREE.Vector3(targetLook.x, targetLook.y, targetLook.z)
+
+    const startTime = performance.now()
+
+    if (!duration || duration <= 0) {
+      camera.position.copy(targetPosV)
+      camera.lookAt(targetLookV)
+      return
+    }
+
+    if (_cameraAnim) cancelAnimationFrame(_cameraAnim)
+
+    function easeInOutQuad(t) {
+      return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t
+    }
+
+    function step(now) {
+      const t = Math.min(1, (now - startTime) / duration)
+      const e = easeInOutQuad(t)
+
+      camera.position.lerpVectors(startPos, targetPosV, e)
+
+      const lerpedLook = startLook.clone().lerp(targetLookV, e)
+      camera.lookAt(lerpedLook)
+
+      if (t < 1) {
+        _cameraAnim = requestAnimationFrame(step)
+      } else {
+        _cameraAnim = null
+        camera.position.copy(targetPosV)
+        camera.lookAt(targetLookV)
+      }
+    }
+
+    _cameraAnim = requestAnimationFrame((ts) => step(ts || performance.now()))
+  }
+
+  // Return to stored default view (home). duration=0 for instant.
+  function goHome(duration = 700) {
+    moveCameraToVectors(_defaultCameraPosition, _defaultLookAt, duration)
+  }
+
   loader.load('/desk_scene.glb', (gltf) => {
     scene.add(gltf.scene)
+
+    // compute scene bounding sphere (used to frame the scene to the camera)
+    const sceneBox = new THREE.Box3().setFromObject(gltf.scene)
+    const sceneSphere = new THREE.Sphere()
+    sceneBox.getBoundingSphere(sceneSphere)
+    // store for later use on resize
+    let sceneFrame = {
+      center: sceneSphere.center.clone(),
+      radius: sceneSphere.radius
+    }
+
+    // Frame the scene: position camera so the whole bounding sphere fits the view
+    function frameScene() {
+      if (!sceneFrame || sceneFrame.radius <= 0) return
+      const radius = sceneFrame.radius
+      const center = sceneFrame.center
+
+      const fov = (camera.fov * Math.PI) / 180
+      const aspect = getWidth() / getHeight()
+
+      // required distance for vertical and horizontal FOV
+      const distanceV = radius / Math.tan(fov / 2)
+      const hFov = 2 * Math.atan(Math.tan(fov / 2) * aspect)
+      const distanceH = radius / Math.tan(hFov / 2)
+      const distance = Math.max(distanceV, distanceH)
+
+      // place camera along +Z axis relative to the scene center (maintains upright view)
+      camera.position.copy(center.clone().add(new THREE.Vector3(0, 0, distance * 1.1)))
+      camera.lookAt(center)
+      camera.updateProjectionMatrix()
+    }
+
+    // keep camera at its default position (do not auto-frame on load)
+    // frameScene() // intentionally not called so default camera position is preserved
 
     // convert glTF materials to unlit flat materials while preserving maps and vertex colors
     function convertToFlatMaterial(mat) {
@@ -281,20 +409,55 @@ export function initScene() {
       }
     })
 
-    // 初始默认 focus 到 desk（瞬移，保留当前 offset/pickable 数据）
-    moveCameraToObject('desk', undefined, 0)
+    // 初始默认聚焦：如果传入 options.autoFocusOnLoad 并指定 focusName，则聚焦该物体
+    if (options.autoFocusOnLoad && options.focusName) {
+      moveCameraToObject(options.focusName, undefined, 0)
+    } else if (options.defaultLookAt) {
+      // 否则如果传入默认看向点，则设置 camera.lookAt
+      const la = options.defaultLookAt
+      if (Array.isArray(la)) camera.lookAt(new THREE.Vector3(la[0], la[1], la[2]))
+      else if (la && typeof la === 'object' && la.isVector3) camera.lookAt(la)
+      else if (la && typeof la === 'object' && 'x' in la) camera.lookAt(new THREE.Vector3(la.x, la.y, la.z))
+    }
   })
 
   window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight
+    camera.aspect = getWidth() / getHeight()
     camera.updateProjectionMatrix()
-    renderer.setSize(window.innerWidth, window.innerHeight)
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    renderer.setSize(getWidth(), getHeight())
+    // preserve default camera position and orientation on resize
   })
 
   function animate() {
     requestAnimationFrame(animate)
     renderer.render(scene, camera)
   }
-
   animate()
+
+  // expose a small API so callers can adjust viewing direction programmatically
+  function setCameraLookAt(x, y, z) {
+    let v
+    if (x && typeof x === 'object' && x.isVector3) v = x
+    else v = new THREE.Vector3(x, y, z)
+    camera.lookAt(v)
+  }
+
+  function setDefaultCameraPosition(x, y, z) {
+    let v
+    if (x && typeof x === 'object' && x.isVector3) v = x
+    else v = new THREE.Vector3(x, y, z)
+    camera.position.copy(v)
+    _defaultCameraPosition.copy(v)
+  }
+
+  function setDefaultLookAt(x, y, z) {
+    let v
+    if (x && typeof x === 'object' && x.isVector3) v = x
+    else v = new THREE.Vector3(x, y, z)
+    camera.lookAt(v)
+    _defaultLookAt.copy(v)
+  }
+
+  return { scene, camera, renderer, setCameraLookAt, setDefaultCameraPosition, setDefaultLookAt, goHome }
 }
